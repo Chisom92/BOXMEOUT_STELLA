@@ -61,5 +61,10 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
-*.sw?
->>>>>>> cc779c64b6f6f610b23f39b69ef8e6392ac9c939
+
+# Planning & AI
+.claude/
+task_plan.md
+findings.md
+progress.md
+issue-13-requirements.md
