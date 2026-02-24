@@ -139,17 +139,51 @@ impl OracleManager {
     }
 
     /// Deregister an oracle node
-    ///
-    /// TODO: Deregister Oracle
-    /// - Require admin authentication
-    /// - Validate oracle is registered
-    /// - Remove oracle from active_oracles list
-    /// - Mark as inactive (don't delete, keep for history)
-    /// - Prevent oracle from submitting new attestations
-    /// - Don't affect existing attestations
-    /// - Emit OracleDeregistered(oracle_address, timestamp)
-    pub fn deregister_oracle(_env: Env, _oracle: Address) {
-        todo!("See deregister oracle TODO above")
+    pub fn deregister_oracle(env: Env, oracle: Address) {
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&Symbol::new(&env, ADMIN_KEY))
+            .expect("Oracle not initialized");
+        admin.require_auth();
+
+        let oracle_key = (Symbol::new(&env, "oracle"), oracle.clone());
+        let is_registered: bool = env.storage().persistent().get(&oracle_key).unwrap_or(false);
+        if !is_registered {
+            panic!("Oracle not registered");
+        }
+
+        env.storage().persistent().set(&oracle_key, &false);
+
+        let oracle_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&Symbol::new(&env, ORACLE_COUNT_KEY))
+            .unwrap_or(0);
+        if oracle_count > 0 {
+            env.storage()
+                .persistent()
+                .set(&Symbol::new(&env, ORACLE_COUNT_KEY), &(oracle_count - 1));
+        }
+
+        let required_consensus: u32 = env
+            .storage()
+            .persistent()
+            .get(&Symbol::new(&env, REQUIRED_CONSENSUS_KEY))
+            .unwrap_or(0);
+        let new_threshold = if oracle_count - 1 < required_consensus {
+            oracle_count - 1
+        } else {
+            required_consensus
+        };
+        env.storage()
+            .persistent()
+            .set(&Symbol::new(&env, REQUIRED_CONSENSUS_KEY), &new_threshold);
+
+        env.events().publish(
+            (Symbol::new(&env, "OracleDeregistered"),),
+            (oracle, env.ledger().timestamp()),
+        );
     }
 
     /// Register a market with its resolution time for attestation validation
@@ -1105,5 +1139,76 @@ mod tests {
         // Verify both challenges exist
         assert!(oracle_client.get_challenge(&oracle1, &market_id).is_some());
         assert!(oracle_client.get_challenge(&oracle2, &market_id).is_some());
+    }
+
+    #[test]
+    fn test_deregister_oracle() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (oracle_client, _admin, oracle1, oracle2) = setup_oracle(&env);
+        register_test_oracles(&env, &oracle_client, &oracle1, &oracle2);
+
+        oracle_client.deregister_oracle(&oracle1);
+
+        let oracle_key = (Symbol::new(&env, "oracle"), oracle1.clone());
+        let is_active: bool = env
+            .as_contract(&oracle_client.address, || {
+                env.storage().persistent().get(&oracle_key)
+            })
+            .unwrap_or(true);
+        assert!(!is_active);
+    }
+
+    #[test]
+    #[should_panic(expected = "Oracle not registered")]
+    fn test_deregister_unregistered_oracle() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (oracle_client, _admin, _oracle1, _oracle2) = setup_oracle(&env);
+        let unregistered = Address::generate(&env);
+
+        oracle_client.deregister_oracle(&unregistered);
+    }
+
+    #[test]
+    fn test_deregister_oracle_recalculates_threshold() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (oracle_client, _admin, oracle1, oracle2) = setup_oracle(&env);
+        register_test_oracles(&env, &oracle_client, &oracle1, &oracle2);
+
+        oracle_client.deregister_oracle(&oracle1);
+
+        let threshold: u32 = env
+            .as_contract(&oracle_client.address, || {
+                env.storage()
+                    .persistent()
+                    .get(&Symbol::new(&env, REQUIRED_CONSENSUS_KEY))
+            })
+            .unwrap_or(0);
+        assert_eq!(threshold, 1);
+    }
+
+    #[test]
+    fn test_deregister_oracle_decrements_count() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (oracle_client, _admin, oracle1, oracle2) = setup_oracle(&env);
+        register_test_oracles(&env, &oracle_client, &oracle1, &oracle2);
+
+        oracle_client.deregister_oracle(&oracle1);
+
+        let count: u32 = env
+            .as_contract(&oracle_client.address, || {
+                env.storage()
+                    .persistent()
+                    .get(&Symbol::new(&env, ORACLE_COUNT_KEY))
+            })
+            .unwrap_or(0);
+        assert_eq!(count, 1);
     }
 }
