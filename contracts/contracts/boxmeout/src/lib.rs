@@ -33,6 +33,7 @@ mod oracle;
 
 // Helper modules - Always included for utility functions
 mod helpers;
+pub mod math;
 
 // ============================================================================
 // CONDITIONAL EXPORTS - Export the contract being built
